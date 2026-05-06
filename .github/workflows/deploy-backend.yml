@@ -1,0 +1,61 @@
+# GitHub Actions workflow: deploy backend to AWS on push to main
+#
+# What this does:
+#   1. Checks out your code
+#   2. Installs Node + dependencies
+#   3. Configures AWS credentials (from GitHub Secrets — never put keys in code!)
+#   4. Runs `cdk deploy --all` to create/update all CloudFormation stacks
+#
+# How to set up AWS credentials in GitHub:
+#   1. Go to your GitHub repo → Settings → Secrets → New repository secret
+#   2. Add: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION
+#   3. Create an IAM user in AWS Console with AdministratorAccess (for learning)
+#      In production you'd scope permissions down — but for learning, full access is fine
+
+name: Deploy Backend
+
+on:
+  push:
+    branches: [main]
+    paths: ['backend/**']  # only run when backend code changes
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Setup Python (for scraper Lambda)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: CDK Bootstrap (first deploy only — safe to re-run)
+        run: npx cdk bootstrap
+
+      - name: CDK Deploy
+        run: npx cdk deploy --all --require-approval never
+        env:
+          ALERT_EMAIL: ${{ secrets.ALERT_EMAIL }}

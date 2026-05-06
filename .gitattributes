@@ -1,0 +1,2 @@
+# Normalize line endings: store as LF in repo, convert to native on checkout
+* text=auto

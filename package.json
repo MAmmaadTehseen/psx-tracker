@@ -1,0 +1,14 @@
+{
+  "name": "psx-tracker",
+  "private": true,
+  "version": "0.0.1",
+  "engines": {
+    "node": ">=20.0.0",
+    "pnpm": ">=10.0.0"
+  },
+  "scripts": {
+    "frontend": "pnpm --filter frontend start",
+    "backend:deploy": "pnpm --filter backend deploy",
+    "backend:local": "pnpm --filter backend local"
+  }
+}

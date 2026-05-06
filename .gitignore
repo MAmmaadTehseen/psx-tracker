@@ -1,0 +1,36 @@
+node_modules/
+.env
+.env.local
+*.env
+
+# Expo
+frontend/.expo/
+frontend/dist/
+frontend/web-build/
+
+# CDK
+backend/cdk.out/
+backend/cdk/*.js
+backend/cdk/*.d.ts
+backend/src/functions/**/*.js
+backend/src/functions/**/*.d.ts
+!backend/src/functions/scraper/**
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+backend/src/functions/scraper/package/
+
+# AWS
+.aws-sam/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Private learning journal (local only)
+LEARNING.md
+
+# Claude Code local settings
+.claude/
