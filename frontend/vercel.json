@@ -1,6 +1,6 @@
 {
-  "installCommand": "npm i -g pnpm@10 && cd .. && pnpm install --frozen-lockfile",
-  "buildCommand": "pnpm run build:web",
+  "installCommand": "cd .. && npx --yes pnpm@10 install --frozen-lockfile",
+  "buildCommand": "npx --yes pnpm@10 run build:web",
   "outputDirectory": "dist",
   "framework": null
 }
