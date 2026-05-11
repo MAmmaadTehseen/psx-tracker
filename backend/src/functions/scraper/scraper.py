@@ -147,7 +147,7 @@ def scrape_indices():
         indices = []
         for item in data.get('data', []):
             indices.append({
-                'name': item.get('index_name', '').replace(' ', '_').upper(),
+                'name': item.get('index_name', '').replace(' ', '_').replace('-', '_').upper(),
                 'value': float(item.get('current', 0) or 0),
                 'change': float(item.get('change', 0) or 0),
                 'changePct': float(item.get('change_p', 0) or 0),

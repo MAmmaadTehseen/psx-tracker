@@ -1,5 +1,5 @@
 {
-  "installCommand": "npm i -g pnpm@latest && cd .. && pnpm install --frozen-lockfile",
+  "installCommand": "npm i -g pnpm@10 && cd .. && pnpm install --frozen-lockfile",
   "buildCommand": "pnpm run build:web",
   "outputDirectory": "dist",
   "framework": null
