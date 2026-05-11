@@ -85,11 +85,53 @@ export class ApiStack extends cdk.Stack {
       logGroup: makeLogGroup('delete-trade'),
     });
 
+    const createPortfolioFn = new lambdaNode.NodejsFunction(this, 'CreatePortfolioFn', {
+      ...defaultLambdaProps,
+      entry: path.join(__dirname, '../src/functions/createPortfolio/index.ts'),
+      functionName: 'psx-create-portfolio',
+      logGroup: makeLogGroup('create-portfolio'),
+    });
+
+    const deletePortfolioFn = new lambdaNode.NodejsFunction(this, 'DeletePortfolioFn', {
+      ...defaultLambdaProps,
+      entry: path.join(__dirname, '../src/functions/deletePortfolio/index.ts'),
+      functionName: 'psx-delete-portfolio',
+      logGroup: makeLogGroup('delete-portfolio'),
+    });
+
+    const renamePortfolioFn = new lambdaNode.NodejsFunction(this, 'RenamePortfolioFn', {
+      ...defaultLambdaProps,
+      entry: path.join(__dirname, '../src/functions/renamePortfolio/index.ts'),
+      functionName: 'psx-rename-portfolio',
+      logGroup: makeLogGroup('rename-portfolio'),
+    });
+
     const getDividendsFn = new lambdaNode.NodejsFunction(this, 'GetDividendsFn', {
       ...defaultLambdaProps,
       entry: path.join(__dirname, '../src/functions/getDividends/index.ts'),
       functionName: 'psx-get-dividends',
       logGroup: makeLogGroup('get-dividends'),
+    });
+
+    const watchlistFn = new lambdaNode.NodejsFunction(this, 'WatchlistFn', {
+      ...defaultLambdaProps,
+      entry: path.join(__dirname, '../src/functions/watchlist/index.ts'),
+      functionName: 'psx-watchlist',
+      logGroup: makeLogGroup('watchlist'),
+    });
+
+    const getIndicesFn = new lambdaNode.NodejsFunction(this, 'GetIndicesFn', {
+      ...defaultLambdaProps,
+      entry: path.join(__dirname, '../src/functions/getIndices/index.ts'),
+      functionName: 'psx-get-indices',
+      logGroup: makeLogGroup('get-indices'),
+    });
+
+    const getIndicesHistoryFn = new lambdaNode.NodejsFunction(this, 'GetIndicesHistoryFn', {
+      ...defaultLambdaProps,
+      entry: path.join(__dirname, '../src/functions/getIndicesHistory/index.ts'),
+      functionName: 'psx-get-indices-history',
+      logGroup: makeLogGroup('get-indices-history'),
     });
 
     const getUploadUrlFn = new lambdaNode.NodejsFunction(this, 'GetUploadUrlFn', {
@@ -104,14 +146,35 @@ export class ApiStack extends cdk.Stack {
       },
     });
 
+    const processTradesCsvFn = new lambdaNode.NodejsFunction(this, 'ProcessTradesCsvFn', {
+      ...defaultLambdaProps,
+      entry: path.join(__dirname, '../src/functions/processTradesCsv/index.ts'),
+      functionName: 'psx-process-trades-csv',
+      logGroup: makeLogGroup('process-trades-csv'),
+      timeout: cdk.Duration.seconds(30),  // CSV parsing + batch writes can take longer
+      environment: {
+        TABLE_NAME: table.tableName,
+        UPLOADS_BUCKET: uploadsBucket.bucketName,
+        NODE_OPTIONS: '--enable-source-maps',
+      },
+    });
+
     // --- IAM Permissions ---
+    table.grantReadWriteData(watchlistFn);
+    table.grantReadData(getIndicesFn);
+    table.grantReadData(getIndicesHistoryFn);
     table.grantReadData(listStocksFn);
     table.grantReadData(getStockFn);
     table.grantReadData(getPortfolioFn);
     table.grantReadData(getDividendsFn);
     table.grantReadWriteData(addTradeFn);
     table.grantReadWriteData(deleteTradeFn);
+    table.grantReadWriteData(createPortfolioFn);
+    table.grantReadWriteData(deletePortfolioFn);
+    table.grantReadWriteData(renamePortfolioFn);
     uploadsBucket.grantPut(getUploadUrlFn);
+    uploadsBucket.grantRead(processTradesCsvFn);
+    table.grantReadWriteData(processTradesCsvFn);
 
     // --- API Gateway (HTTP API) ---
     const api = new apigateway.HttpApi(this, 'PsxHttpApi', {
@@ -122,6 +185,7 @@ export class ApiStack extends cdk.Stack {
         allowMethods: [
           apigateway.CorsHttpMethod.GET,
           apigateway.CorsHttpMethod.POST,
+          apigateway.CorsHttpMethod.PUT,
           apigateway.CorsHttpMethod.DELETE,
           apigateway.CorsHttpMethod.OPTIONS,
         ],
@@ -144,6 +208,18 @@ export class ApiStack extends cdk.Stack {
 
     // --- Routes ---
     // Public (no auth)
+    api.addRoutes({
+      path: '/indices',
+      methods: [apigateway.HttpMethod.GET],
+      integration: new integrations.HttpLambdaIntegration('GetIndices', getIndicesFn),
+    });
+
+    api.addRoutes({
+      path: '/indices/history',
+      methods: [apigateway.HttpMethod.GET],
+      integration: new integrations.HttpLambdaIntegration('GetIndicesHistory', getIndicesHistoryFn),
+    });
+
     api.addRoutes({
       path: '/stocks',
       methods: [apigateway.HttpMethod.GET],
@@ -171,6 +247,27 @@ export class ApiStack extends cdk.Stack {
     });
 
     api.addRoutes({
+      path: '/portfolio',
+      methods: [apigateway.HttpMethod.POST],
+      integration: new integrations.HttpLambdaIntegration('CreatePortfolio', createPortfolioFn),
+      authorizer: jwtAuthorizer,
+    });
+
+    api.addRoutes({
+      path: '/portfolio/{portfolioId}',
+      methods: [apigateway.HttpMethod.DELETE],
+      integration: new integrations.HttpLambdaIntegration('DeletePortfolio', deletePortfolioFn),
+      authorizer: jwtAuthorizer,
+    });
+
+    api.addRoutes({
+      path: '/portfolio/{portfolioId}',
+      methods: [apigateway.HttpMethod.PUT],
+      integration: new integrations.HttpLambdaIntegration('RenamePortfolio', renamePortfolioFn),
+      authorizer: jwtAuthorizer,
+    });
+
+    api.addRoutes({
       path: '/portfolio/trade',
       methods: [apigateway.HttpMethod.POST],
       integration: new integrations.HttpLambdaIntegration('AddTrade', addTradeFn),
@@ -188,6 +285,27 @@ export class ApiStack extends cdk.Stack {
       path: '/upload-url',
       methods: [apigateway.HttpMethod.GET],
       integration: new integrations.HttpLambdaIntegration('GetUploadUrl', getUploadUrlFn),
+      authorizer: jwtAuthorizer,
+    });
+
+    api.addRoutes({
+      path: '/portfolio/import',
+      methods: [apigateway.HttpMethod.POST],
+      integration: new integrations.HttpLambdaIntegration('ProcessTradesCsv', processTradesCsvFn),
+      authorizer: jwtAuthorizer,
+    });
+
+    api.addRoutes({
+      path: '/watchlist',
+      methods: [apigateway.HttpMethod.GET, apigateway.HttpMethod.POST],
+      integration: new integrations.HttpLambdaIntegration('Watchlist', watchlistFn),
+      authorizer: jwtAuthorizer,
+    });
+
+    api.addRoutes({
+      path: '/watchlist/{ticker}',
+      methods: [apigateway.HttpMethod.DELETE],
+      integration: new integrations.HttpLambdaIntegration('WatchlistDelete', watchlistFn),
       authorizer: jwtAuthorizer,
     });
 

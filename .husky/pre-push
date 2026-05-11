@@ -1,0 +1,9 @@
+#!/usr/bin/env sh
+# Runs on every `git push`. Push is cancelled if either build fails.
+# Slower (~30-60s) — does a real compile and bundle, catching errors tsc misses.
+
+echo "→ Building backend (full TypeScript compile)..."
+pnpm --filter backend run build
+
+echo "→ Building frontend (Expo web bundle)..."
+pnpm --filter frontend run build:web

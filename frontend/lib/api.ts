@@ -40,6 +40,12 @@ async function request<T>(
 
 export const api = {
   // Public — no auth needed
+  getIndices: () =>
+    request<{ indices: Index[] }>('/indices'),
+
+  getIndicesHistory: (days = 30) =>
+    request<{ history: Record<string, IndexHistoryPoint[]> }>(`/indices/history?days=${days}`),
+
   getStocks: (sector?: string) =>
     request<{ stocks: StockMetadata[] }>(
       `/stocks${sector ? `?sector=${sector}` : ''}`
@@ -69,6 +75,31 @@ export const api = {
     );
   },
 
+  createPortfolio: async (name: string) => {
+    const headers = await authHeaders();
+    return request<{ portfolioId: string; name: string }>('/portfolio', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ name }),
+    });
+  },
+
+  deletePortfolio: async (portfolioId: string) => {
+    const headers = await authHeaders();
+    return request<{ deleted: boolean; tradesRemoved: number }>(
+      `/portfolio/${portfolioId}`,
+      { method: 'DELETE', headers }
+    );
+  },
+
+  renamePortfolio: async (portfolioId: string, name: string) => {
+    const headers = await authHeaders();
+    return request<{ portfolioId: string; name: string }>(
+      `/portfolio/${portfolioId}`,
+      { method: 'PUT', headers, body: JSON.stringify({ name }) }
+    );
+  },
+
   addTrade: async (trade: Omit<Trade, 'tradeId' | 'userId' | 'createdAt'>) => {
     const headers = await authHeaders();
     return request<{ tradeId: string; message: string }>('/portfolio/trade', {
@@ -93,9 +124,48 @@ export const api = {
       { headers }
     );
   },
+
+  importTradesCsv: async (portfolioId: string, key: string) => {
+    const headers = await authHeaders();
+    return request<{ imported: number; skipped: number; errors: { row: number; reason: string }[] }>(
+      '/portfolio/import',
+      { method: 'POST', headers, body: JSON.stringify({ portfolioId, key }) }
+    );
+  },
+
+  // Watchlist (protected)
+  getWatchlist: async () => {
+    const headers = await authHeaders();
+    return request<{ tickers: string[] }>('/watchlist', { headers });
+  },
+
+  addToWatchlist: async (ticker: string) => {
+    const headers = await authHeaders();
+    return request<{ ticker: string; watching: boolean }>('/watchlist', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ ticker }),
+    });
+  },
+
+  removeFromWatchlist: async (ticker: string) => {
+    const headers = await authHeaders();
+    return request<{ ticker: string; watching: boolean }>(
+      `/watchlist/${ticker}`,
+      { method: 'DELETE', headers }
+    );
+  },
 };
 
 // ─── Types ───────────────────────────────────────────────────────────────────
+
+export interface Index {
+  name: string;
+  value: number | null;
+  change: number | null;
+  changePct: number | null;
+  updatedAt: string | null;
+}
 
 export interface StockMetadata {
   ticker: string;
@@ -104,6 +174,7 @@ export interface StockMetadata {
   marketCap?: number;
   pe?: number;
   eps?: number;
+  bookValue?: number;
 }
 
 export interface StockPrice {
@@ -154,4 +225,10 @@ export interface Holding {
   unrealizedGain: number;
   unrealizedGainPct: number;
   realizedGain: number;
+}
+
+export interface IndexHistoryPoint {
+  date: string;
+  value: number;
+  changePct: number;
 }

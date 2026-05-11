@@ -60,13 +60,21 @@ def handler(event, context):
             write_prices(prices, today)
             logger.info(f'Wrote {len(prices)} stock prices')
 
+            # Write METADATA on every run — fixes 404 on stock detail and keeps
+            # name/sector/fundamentals current. Batch write is cheap (<1 WCU per item).
+            write_fundamentals(prices)
+            logger.info(f'Wrote {len(prices)} stock metadata items')
+
         indices = scrape_indices()
         if indices:
-            write_indices(indices)
+            write_indices(indices, today)
             logger.info(f'Wrote {len(indices)} index values')
 
-        # Only scrape dividends once a day (at EOD), not every 5 minutes
-        if event.get('source') == 'aws.events' and is_eod_run():
+        # Only scrape dividends on the EOD run.
+        # The EOD EventBridge rule passes {"runType": "eod"} in its event input,
+        # which is more reliable than checking the clock (the 5-min rule also
+        # fires at 10:25 UTC, inside the same hour as EOD).
+        if event.get('runType') == 'eod':
             dividends = scrape_dividends()
             if dividends:
                 write_dividends(dividends)
@@ -100,6 +108,8 @@ def scrape_prices():
             try:
                 prices.append({
                     'ticker': item.get('symbol', '').upper(),
+                    'name': item.get('name', '') or item.get('company_name', ''),
+                    'sector': item.get('sector', '') or item.get('sector_name', ''),
                     'open': float(item.get('open', 0) or 0),
                     'high': float(item.get('high', 0) or 0),
                     'low': float(item.get('low', 0) or 0),
@@ -107,7 +117,11 @@ def scrape_prices():
                     'volume': int(item.get('volume', 0) or 0),
                     'change': float(item.get('change', 0) or 0),
                     'changePct': float(item.get('change_p', 0) or 0),
-                    'ldcp': float(item.get('ldcp', 0) or 0),  # last day closing price
+                    'ldcp': float(item.get('ldcp', 0) or 0),
+                    # PSX API may include these; default to 0 if absent
+                    'pe': float(item.get('pe', 0) or item.get('pe_ratio', 0) or 0),
+                    'eps': float(item.get('eps', 0) or 0),
+                    'bookValue': float(item.get('bv', 0) or item.get('book_value', 0) or 0),
                 })
             except (ValueError, TypeError) as e:
                 logger.warning(f"Skipping malformed item {item.get('symbol')}: {e}")
@@ -217,18 +231,66 @@ def write_prices(prices, date):
             })
 
 
-def write_indices(indices):
-    """Write current index values (overwrite LATEST item each time)."""
+def write_fundamentals(prices):
+    """
+    Write STOCK#<ticker> METADATA items to DynamoDB.
+
+    Runs on every scraper invocation so the stock detail page never 404s.
+    PE/EPS/bookValue are included if the PSX equities API returns them; they
+    stay 0 otherwise — at minimum, name and sector are always populated.
+    """
+    with table.batch_writer() as batch:
+        for p in prices:
+            if not p['ticker']:
+                continue
+            item = {
+                'PK': f"STOCK#{p['ticker']}",
+                'SK': 'METADATA',
+                'ticker': p['ticker'],
+                'name': p['name'],
+                'sector': p['sector'],
+                'updatedAt': datetime.now(timezone.utc).isoformat(),
+            }
+            # Only write numeric fundamentals if non-zero — avoids overwriting
+            # real data with zeros if the API drops a field temporarily.
+            if p['pe']:
+                item['pe'] = Decimal(str(round(p['pe'], 2)))
+            if p['eps']:
+                item['eps'] = Decimal(str(round(p['eps'], 2)))
+            if p['bookValue']:
+                item['bookValue'] = Decimal(str(round(p['bookValue'], 2)))
+            batch.put_item(Item=item)
+
+
+def write_indices(indices, date):
+    """
+    Write index values to DynamoDB in two forms:
+      - SK=LATEST:      overwritten every scraper run — used by the live index cards
+      - SK=PRICE#{date}: one item per day — used for historical index charts
+
+    Why both? LATEST gives us O(1) read for the live display. PRICE#{date} lets us
+    query 'give me all index values from the last 30 days' with a range key query.
+    """
     with table.batch_writer() as batch:
         for idx in indices:
-            batch.put_item(Item={
-                'PK': f"INDEX#{idx['name']}",
-                'SK': 'LATEST',
+            item_base = {
                 'value': Decimal(str(idx['value'])),
                 'change': Decimal(str(idx['change'])),
                 'changePct': Decimal(str(idx['changePct'])),
                 'volume': idx['volume'],
                 'updatedAt': datetime.now(timezone.utc).isoformat(),
+            }
+            # Overwrite the live snapshot
+            batch.put_item(Item={
+                'PK': f"INDEX#{idx['name']}",
+                'SK': 'LATEST',
+                **item_base,
+            })
+            # Write the daily historical snapshot (idempotent: last write of the day wins)
+            batch.put_item(Item={
+                'PK': f"INDEX#{idx['name']}",
+                'SK': f"PRICE#{date}",
+                **item_base,
             })
 
 
@@ -247,6 +309,3 @@ def write_dividends(dividends):
             })
 
 
-def is_eod_run():
-    """True if the current UTC hour is 10 (= 15:00 PKT, near market close)."""
-    return datetime.now(timezone.utc).hour == 10

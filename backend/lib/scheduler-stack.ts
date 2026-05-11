@@ -69,10 +69,13 @@ export class SchedulerStack extends cdk.Stack {
       })],
     });
 
-    // Separate rule for end-of-day scrape at market close (10:30 UTC = 15:30 PKT)
+    // Separate rule for end-of-day scrape at market close (10:35 UTC = 15:35 PKT).
+    // We pass { "runType": "eod" } in the event so the Lambda knows this is the
+    // EOD run without having to guess from the clock (which was fragile — the
+    // 5-min rule also runs at 10:25 UTC, inside the same clock hour).
     new events.Rule(this, 'ScraperEndOfDay', {
       ruleName: 'psx-scraper-eod',
-      description: 'Run PSX scraper at market close for final EOD snapshot',
+      description: 'Run PSX scraper at market close for final EOD snapshot + dividends',
       schedule: events.Schedule.cron({
         minute: '35',
         hour: '10',
@@ -80,7 +83,10 @@ export class SchedulerStack extends cdk.Stack {
         month: '*',
         year: '*',
       }),
-      targets: [new targets.LambdaFunction(scraperFn, { retryAttempts: 3 })],
+      targets: [new targets.LambdaFunction(scraperFn, {
+        retryAttempts: 3,
+        event: events.RuleTargetInput.fromObject({ runType: 'eod' }),
+      })],
     });
 
     new cdk.CfnOutput(this, 'ScraperFunctionName', { value: scraperFn.functionName });

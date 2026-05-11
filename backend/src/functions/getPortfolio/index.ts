@@ -5,74 +5,80 @@
 
 import { QueryCommand, GetCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb, TABLE_NAME, response } from '../../lib/db';
+import { internalError } from '../../lib/validate';
 
 export const handler = async (event: any) => {
-  // The userId comes from the Cognito JWT, not from the request body.
-  // API Gateway validates the JWT and passes the claims to the Lambda.
-  // This prevents users from accessing each other's portfolios.
-  const userId = event.requestContext?.authorizer?.jwt?.claims?.sub;
-  if (!userId) return response(401, { error: 'Unauthorized' });
+  try {
+    const userId = event.requestContext?.authorizer?.jwt?.claims?.sub;
+    if (!userId) return response(401, { error: 'Unauthorized' });
 
-  const portfolioId = event.queryStringParameters?.portfolioId;
+    const portfolioId = event.queryStringParameters?.portfolioId;
 
-  // Get all portfolios for this user if no specific one requested
-  if (!portfolioId) {
-    const result = await ddb.send(new QueryCommand({
+    if (!portfolioId) {
+      const result = await ddb.send(new QueryCommand({
+        TableName: TABLE_NAME,
+        KeyConditionExpression: 'PK = :pk AND begins_with(SK, :prefix)',
+        ExpressionAttributeValues: {
+          ':pk': `USER#${userId}`,
+          ':prefix': 'PORTFOLIO#',
+        },
+      }));
+      return response(200, { portfolios: result.Items ?? [] });
+    }
+
+    // Verify portfolio ownership before fetching trades
+    const portfolioItem = await ddb.send(new GetCommand({
+      TableName: TABLE_NAME,
+      Key: { PK: `USER#${userId}`, SK: `PORTFOLIO#${portfolioId}` },
+    }));
+    if (!portfolioItem.Item) {
+      return response(404, { error: 'Portfolio not found' });
+    }
+
+    const tradesResult = await ddb.send(new QueryCommand({
       TableName: TABLE_NAME,
       KeyConditionExpression: 'PK = :pk AND begins_with(SK, :prefix)',
       ExpressionAttributeValues: {
         ':pk': `USER#${userId}`,
-        ':prefix': 'PORTFOLIO#',
-      },
-    }));
-    return response(200, { portfolios: result.Items ?? [] });
-  }
-
-  // Get all trades for the specified portfolio
-  const tradesResult = await ddb.send(new QueryCommand({
-    TableName: TABLE_NAME,
-    KeyConditionExpression: 'PK = :pk AND begins_with(SK, :prefix)',
-    ExpressionAttributeValues: {
-      ':pk': `USER#${userId}`,
-      ':prefix': `TRADE#${portfolioId}#`,
-    },
-    ScanIndexForward: false,
-  }));
-
-  const trades = tradesResult.Items ?? [];
-
-  // Get current prices for all unique tickers in this portfolio
-  const tickers = [...new Set(trades.map((t: any) => t.ticker))];
-  const pricePromises = tickers.map(ticker =>
-    ddb.send(new QueryCommand({
-      TableName: TABLE_NAME,
-      KeyConditionExpression: 'PK = :pk AND begins_with(SK, :prefix)',
-      ExpressionAttributeValues: {
-        ':pk': `STOCK#${ticker}`,
-        ':prefix': 'PRICE#',
+        ':prefix': `TRADE#${portfolioId}#`,
       },
       ScanIndexForward: false,
-      Limit: 1,
-    }))
-  );
+    }));
 
-  const priceResults = await Promise.all(pricePromises);
-  const currentPrices: Record<string, number> = {};
-  tickers.forEach((ticker, i) => {
-    const items = priceResults[i].Items ?? [];
-    if (items.length > 0) currentPrices[ticker] = items[0].close;
-  });
+    const trades = tradesResult.Items ?? [];
 
-  // Calculate holdings: group trades by ticker, compute avg cost + P&L
-  const holdings = calculateHoldings(trades, currentPrices);
+    const tickers = [...new Set(trades.map((t: any) => t.ticker))];
+    const pricePromises = tickers.map(ticker =>
+      ddb.send(new QueryCommand({
+        TableName: TABLE_NAME,
+        KeyConditionExpression: 'PK = :pk AND begins_with(SK, :prefix)',
+        ExpressionAttributeValues: {
+          ':pk': `STOCK#${ticker}`,
+          ':prefix': 'PRICE#',
+        },
+        ScanIndexForward: false,
+        Limit: 1,
+      }))
+    );
 
-  return response(200, { portfolioId, holdings, trades });
+    const priceResults = await Promise.all(pricePromises);
+    const currentPrices: Record<string, number> = {};
+    tickers.forEach((ticker, i) => {
+      const items = priceResults[i].Items ?? [];
+      if (items.length > 0) currentPrices[ticker] = items[0].close;
+    });
+
+    const holdings = calculateHoldings(trades, currentPrices);
+
+    return response(200, { portfolioId, holdings, trades });
+  } catch (err) {
+    return internalError(err);
+  }
 };
 
 function calculateHoldings(trades: any[], currentPrices: Record<string, number>) {
   const byTicker: Record<string, any> = {};
 
-  // Process trades in chronological order for correct avg cost calculation
   const sorted = [...trades].sort(
     (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()
   );
@@ -88,7 +94,6 @@ function calculateHoldings(trades: any[], currentPrices: Record<string, number>)
       h.totalCost += cost;
       h.qty += trade.quantity;
     } else {
-      // Sell: use average cost to calculate realized gain
       const avgCost = h.qty > 0 ? h.totalCost / h.qty : 0;
       h.realizedGain += (trade.pricePerShare - avgCost) * trade.quantity - trade.brokerage;
       h.totalCost -= avgCost * trade.quantity;

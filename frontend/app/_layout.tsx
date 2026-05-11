@@ -41,14 +41,16 @@ export default function RootLayout() {
       <StatusBar style="light" />
       <Stack
         screenOptions={{
-          headerStyle: { backgroundColor: '#0a0e1a' },
-          headerTintColor: '#ffffff',
-          contentStyle: { backgroundColor: '#0a0e1a' },
+          headerStyle: { backgroundColor: '#03060e' },
+          headerTintColor: '#e8eef8',
+          contentStyle: { backgroundColor: '#03060e' },
         }}
       >
+        <Stack.Screen name="index" options={{ headerShown: false }} />
         <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
         <Stack.Screen name="(auth)" options={{ headerShown: false }} />
         <Stack.Screen name="stock/[ticker]" options={{ title: '' }} />
+        <Stack.Screen name="add-trade" options={{ title: 'Add Trade', presentation: 'modal' }} />
         <Stack.Screen name="+not-found" />
       </Stack>
     </QueryClientProvider>

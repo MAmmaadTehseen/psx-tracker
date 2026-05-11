@@ -7,8 +7,13 @@
     "pnpm": ">=10.0.0"
   },
   "scripts": {
+    "prepare": "husky",
+    "typecheck": "pnpm --filter backend run typecheck && pnpm --filter frontend run typecheck",
     "frontend": "pnpm --filter frontend start",
     "backend:deploy": "pnpm --filter backend deploy",
     "backend:local": "pnpm --filter backend local"
+  },
+  "devDependencies": {
+    "husky": "^9.0.0"
   }
 }

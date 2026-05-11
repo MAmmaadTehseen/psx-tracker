@@ -1,0 +1,74 @@
+# CI — runs on every PR and on pushes to non-main branches.
+# Blocks PR merge if type-check or build fails.
+# This is the remote safety net: catches errors even if someone skips local hooks.
+#
+# Two jobs run in parallel:
+#   check-backend  → tsc --noEmit (type-check CDK infrastructure code)
+#   check-frontend → tsc --noEmit + expo export (type-check + full web bundle)
+
+name: CI
+
+on:
+  push:
+    branches-ignore: [main, master]  # main/master are handled by deploy workflows
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  check-backend:
+    name: Backend type-check
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Type-check
+        run: pnpm run typecheck
+
+  check-frontend:
+    name: Frontend type-check + build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Type-check
+        run: pnpm run typecheck
+
+      - name: Build web bundle
+        run: pnpm run build:web
+        env:
+          EXPO_PUBLIC_API_URL: ${{ secrets.API_URL }}
+          EXPO_PUBLIC_COGNITO_USER_POOL_ID: ${{ secrets.COGNITO_USER_POOL_ID }}
+          EXPO_PUBLIC_COGNITO_CLIENT_ID: ${{ secrets.COGNITO_CLIENT_ID }}
+          EXPO_PUBLIC_REGION: ${{ secrets.APP_REGION }}

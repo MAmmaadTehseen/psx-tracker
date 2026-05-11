@@ -1,0 +1,9 @@
+#!/usr/bin/env sh
+# Runs on every `git commit`. Commit is cancelled if either check fails.
+# Fast (~5s) — only type-checks, no output files written.
+
+echo "→ Type-checking backend..."
+pnpm --filter backend run typecheck
+
+echo "→ Type-checking frontend..."
+pnpm --filter frontend run typecheck

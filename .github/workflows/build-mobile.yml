@@ -1,24 +1,27 @@
-# EAS Build — builds Android APK when you push a git tag like v1.0.0
+# EAS Build — triggers on git tags like v1.0.0
+# Builds an Android APK via EAS cloud (free tier: 30 builds/month)
+# then uploads it as a GitHub Release asset.
 #
-# EAS (Expo Application Services) free tier: 30 builds/month
-# The APK can be installed directly on Android devices (sideload)
-# No Play Store submission needed for testing
+# Required GitHub secrets:
+#   EXPO_TOKEN              — from expo.dev/accounts/[you]/settings/access-tokens
+#   API_URL                 — CDK output: API Gateway URL
+#   COGNITO_USER_POOL_ID    — CDK output
+#   COGNITO_CLIENT_ID       — CDK output
+#   APP_REGION              — e.g. us-east-1  (not AWS_REGION — that name is reserved by GitHub Actions)
 #
-# Setup:
-#   1. Install EAS CLI: npm install -g eas-cli
-#   2. Login: eas login
-#   3. Configure: eas build:configure (run in frontend/)
-#   4. Add EXPO_TOKEN secret to GitHub (get from expo.dev/accounts/tokens)
+# To release: git tag v1.2.3 && git push --tags
 
-name: Build Mobile
+name: Build & Release Android APK
 
 on:
   push:
-    tags: ['v*']  # runs on tags like v1.0.0, v1.1.0
+    tags: ['v*.*.*']
 
 jobs:
   build-android:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write   # needed to create GitHub Release
     defaults:
       run:
         working-directory: frontend
@@ -44,9 +47,34 @@ jobs:
           token: ${{ secrets.EXPO_TOKEN }}
 
       - name: Build Android APK
-        run: eas build --platform android --profile preview --non-interactive
+        id: build
+        run: |
+          BUILD_JSON=$(eas build \
+            --platform android \
+            --profile preview \
+            --non-interactive \
+            --json)
+          echo "apk_url=$(echo "$BUILD_JSON" | jq -r '.[0].artifacts.buildUrl')" >> "$GITHUB_OUTPUT"
         env:
           EXPO_PUBLIC_API_URL: ${{ secrets.API_URL }}
           EXPO_PUBLIC_COGNITO_USER_POOL_ID: ${{ secrets.COGNITO_USER_POOL_ID }}
           EXPO_PUBLIC_COGNITO_CLIENT_ID: ${{ secrets.COGNITO_CLIENT_ID }}
-          EXPO_PUBLIC_COGNITO_REGION: ${{ secrets.AWS_REGION }}
+          EXPO_PUBLIC_REGION: ${{ secrets.APP_REGION }}
+
+      - name: Download APK
+        working-directory: ${{ runner.temp }}
+        run: |
+          curl -L -o "psx-tracker-${{ github.ref_name }}.apk" "${{ steps.build.outputs.apk_url }}"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: PSX Tracker ${{ github.ref_name }}
+          body: |
+            ## PSX Tracker ${{ github.ref_name }}
+
+            **Android APK** — download and install directly on your device.
+
+            > **Install:** enable *Install from unknown sources* in Android Settings → Apps, then open the APK.
+          generate_release_notes: true
+          files: ${{ runner.temp }}/psx-tracker-${{ github.ref_name }}.apk
