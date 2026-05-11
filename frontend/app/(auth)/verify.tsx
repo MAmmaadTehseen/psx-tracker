@@ -3,7 +3,7 @@ import { View, Text, TextInput, TouchableOpacity, ActivityIndicator, Alert, Keyb
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
-import { verifyEmail } from '../../lib/auth';
+import { verifyEmail, resendVerificationCode } from '../../lib/auth';
 import { C, S } from '../../lib/design';
 
 export default function VerifyScreen() {
@@ -12,6 +12,7 @@ export default function VerifyScreen() {
   const [code, setCode] = useState('');
   const [focused, setFocused] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [resending, setResending] = useState(false);
 
   async function handleVerify() {
     if (code.length !== 6) return;
@@ -25,6 +26,19 @@ export default function VerifyScreen() {
       Alert.alert('Verification failed', err.message ?? 'Unknown error');
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function handleResend() {
+    if (!email) return;
+    setResending(true);
+    try {
+      await resendVerificationCode(email);
+      Alert.alert('Code sent', 'A new verification code has been sent to your email.');
+    } catch (err: any) {
+      Alert.alert('Failed to resend', err.message ?? 'Unknown error');
+    } finally {
+      setResending(false);
     }
   }
 
@@ -108,10 +122,18 @@ export default function VerifyScreen() {
             )}
           </TouchableOpacity>
 
-          <TouchableOpacity onPress={() => router.back()} style={{ alignItems: 'center', paddingVertical: 12 }}>
+          <TouchableOpacity onPress={handleResend} disabled={resending} style={{ alignItems: 'center', paddingVertical: 12 }}>
             <Text style={{ color: C.t2, fontSize: 14 }}>
+              {resending ? 'Sending…' : (
+                <>Didn't receive it?{' '}<Text style={{ color: C.primary, fontWeight: '600' }}>Resend code</Text></>
+              )}
+            </Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity onPress={() => router.replace('/(auth)/register')} style={{ alignItems: 'center', paddingVertical: 8 }}>
+            <Text style={{ color: C.t3, fontSize: 13 }}>
               Wrong email?{' '}
-              <Text style={{ color: C.primary, fontWeight: '600' }}>Go back</Text>
+              <Text style={{ color: C.t2, fontWeight: '600' }}>Go back</Text>
             </Text>
           </TouchableOpacity>
         </View>

@@ -28,8 +28,21 @@ export class SchedulerStack extends cdk.Stack {
       runtime: lambda.Runtime.PYTHON_3_12,
       handler: 'scraper.handler',
       code: lambda.Code.fromAsset(path.join(__dirname, '../src/functions/scraper'), {
-        // Bundle Python dependencies declared in requirements.txt into the ZIP
         bundling: {
+          // Try local pip first (no Docker needed). CDK falls back to Docker only if this fails.
+          local: {
+            tryBundle(outputDir: string) {
+              const src = path.join(__dirname, '../src/functions/scraper');
+              const { execSync } = require('child_process');
+              try {
+                execSync(`pip install -r "${src}/requirements.txt" -t "${outputDir}" --quiet`, { stdio: 'inherit' });
+                execSync(`xcopy /E /I /Y "${src}\\*" "${outputDir}\\"`, { stdio: 'inherit' });
+                return true;
+              } catch {
+                return false; // fall back to Docker
+              }
+            },
+          },
           image: lambda.Runtime.PYTHON_3_12.bundlingImage,
           command: [
             'bash', '-c',

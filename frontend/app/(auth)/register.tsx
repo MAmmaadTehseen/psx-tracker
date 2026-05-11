@@ -161,7 +161,7 @@ export default function RegisterScreen() {
 
           {/* Login link */}
           <TouchableOpacity
-            onPress={() => router.back()}
+            onPress={() => router.replace('/(auth)/login')}
             activeOpacity={0.85}
             style={{ borderRadius: 14, paddingVertical: 17, alignItems: 'center', borderWidth: 1, borderColor: C.b2 }}
           >

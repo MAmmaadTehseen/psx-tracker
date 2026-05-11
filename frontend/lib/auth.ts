@@ -98,6 +98,19 @@ export function verifyEmail(email: string, code: string): Promise<void> {
 }
 
 /**
+ * Resend the email verification code (for users stuck on the verify screen).
+ */
+export function resendVerificationCode(email: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const user = new CognitoUser({ Username: email, Pool: userPool });
+    user.resendConfirmationCode((err) => {
+      if (err) return reject(err);
+      resolve();
+    });
+  });
+}
+
+/**
  * Send a password reset code to the user's email.
  */
 export function forgotPassword(email: string): Promise<void> {
