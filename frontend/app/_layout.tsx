@@ -51,6 +51,7 @@ export default function RootLayout() {
         <Stack.Screen name="(auth)" options={{ headerShown: false }} />
         <Stack.Screen name="stock/[ticker]" options={{ title: '' }} />
         <Stack.Screen name="add-trade" options={{ title: 'Add Trade', presentation: 'modal' }} />
+        <Stack.Screen name="modal" options={{ title: 'Import Trades CSV', presentation: 'modal' }} />
         <Stack.Screen name="+not-found" />
       </Stack>
     </QueryClientProvider>

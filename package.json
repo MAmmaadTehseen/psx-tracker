@@ -17,6 +17,6 @@
     "husky": "^9.0.0"
   },
   "pnpm": {
-    "onlyBuiltDependencies": ["esbuild", "@shopify/react-native-skia", "unrs-resolver"]
+    "onlyBuiltDependencies": ["esbuild", "unrs-resolver"]
   }
 }

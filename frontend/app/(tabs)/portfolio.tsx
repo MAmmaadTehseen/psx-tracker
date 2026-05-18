@@ -242,6 +242,15 @@ export default function PortfolioScreen() {
               <Ionicons name="add" size={14} color={C.primary} />
               <Text style={{ color: C.primary, fontWeight: '600', fontSize: 13 }}>New</Text>
             </TouchableOpacity>
+            {/* Import CSV button */}
+            <TouchableOpacity
+              onPress={() => router.push('/modal')}
+              activeOpacity={0.85}
+              style={{ paddingHorizontal: 14, paddingVertical: 9, borderRadius: 20, backgroundColor: C.raised, borderWidth: 1, borderColor: C.b2, flexDirection: 'row', alignItems: 'center', gap: 4 }}
+            >
+              <Ionicons name="cloud-upload-outline" size={14} color={C.t2} />
+              <Text style={{ color: C.t2, fontWeight: '600', fontSize: 13 }}>Import</Text>
+            </TouchableOpacity>
           </ScrollView>
         )}
 

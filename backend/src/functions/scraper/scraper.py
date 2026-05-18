@@ -87,78 +87,155 @@ def handler(event, context):
     return {'statusCode': 200, 'body': 'Scrape complete'}
 
 
+def _parse_num(text, default=0.0):
+    """Strip commas, %, spaces and convert to float."""
+    try:
+        return float(text.replace(',', '').replace('%', '').strip() or default)
+    except (ValueError, AttributeError):
+        return default
+
+
 def scrape_prices():
     """
-    Fetch current prices for all PSX-listed equities.
-    The PSX data portal exposes a JSON endpoint used by their own website.
-    We use the same endpoint — it's public and returns structured data.
+    Fetch current prices for all PSX-listed equities via the market-watch page.
+    PSX removed the /data/equities JSON endpoint; the market-watch HTML table
+    is the only reliable source for a full snapshot of all tickers at once.
     """
     try:
-        # PSX data portal uses a JSON API internally
         resp = requests.get(
-            f'{PSX_BASE}/data/equities',
+            f'{PSX_BASE}/market-watch',
             headers=HEADERS,
             timeout=30,
         )
         resp.raise_for_status()
-        data = resp.json()
+
+        soup = BeautifulSoup(resp.text, 'lxml')
+        table = soup.find('table')
+        if not table:
+            logger.error('market-watch: no table found in response')
+            return []
+
+        rows = table.find_all('tr')
+        if not rows:
+            return []
+
+        # Build column-name → index map from the header row.
+        # Column names vary slightly; normalise to uppercase with no trailing spaces.
+        header_cells = rows[0].find_all(['th', 'td'])
+        col = {cell.get_text(strip=True).upper(): i for i, cell in enumerate(header_cells)}
+
+        # Expected columns: SYMBOL SECTOR LDCP OPEN HIGH LOW CURRENT CHANGE CHANGE(%) VOLUME
+        # Map flexible aliases → canonical names
+        aliases = {
+            'CHANGE (%)': 'CHANGE(%)',
+            'CHANGE(%)': 'CHANGE(%)',
+            'CHG%': 'CHANGE(%)',
+            'CURRENT': 'CURRENT',
+        }
+        for alias, canonical in aliases.items():
+            if alias in col and canonical not in col:
+                col[canonical] = col[alias]
+
+        def cell_text(cells, name, default=''):
+            idx = col.get(name)
+            if idx is None or idx >= len(cells):
+                return default
+            return cells[idx].get_text(strip=True)
 
         prices = []
-        for item in data.get('data', []):
+        for row in rows[1:]:
+            cells = row.find_all('td')
+            if len(cells) < 4:
+                continue
             try:
-                prices.append({
-                    'ticker': item.get('symbol', '').upper(),
-                    'name': item.get('name', '') or item.get('company_name', ''),
-                    'sector': item.get('sector', '') or item.get('sector_name', ''),
-                    'open': float(item.get('open', 0) or 0),
-                    'high': float(item.get('high', 0) or 0),
-                    'low': float(item.get('low', 0) or 0),
-                    'close': float(item.get('current', 0) or 0),
-                    'volume': int(item.get('volume', 0) or 0),
-                    'change': float(item.get('change', 0) or 0),
-                    'changePct': float(item.get('change_p', 0) or 0),
-                    'ldcp': float(item.get('ldcp', 0) or 0),
-                    # PSX API may include these; default to 0 if absent
-                    'pe': float(item.get('pe', 0) or item.get('pe_ratio', 0) or 0),
-                    'eps': float(item.get('eps', 0) or 0),
-                    'bookValue': float(item.get('bv', 0) or item.get('book_value', 0) or 0),
-                })
-            except (ValueError, TypeError) as e:
-                logger.warning(f"Skipping malformed item {item.get('symbol')}: {e}")
+                # Ticker may be wrapped in an <a> tag: <a href="/company/KEL">KEL</a>
+                ticker_cell = cells[col.get('SYMBOL', 0)]
+                ticker = ticker_cell.get_text(strip=True).upper()
+                if not ticker:
+                    continue
 
-        return [p for p in prices if p['ticker'] and p['close'] > 0]
+                close = _parse_num(cell_text(cells, 'CURRENT'))
+                if close <= 0:
+                    continue
+
+                prices.append({
+                    'ticker': ticker,
+                    'name': ticker,   # market-watch has no company name; use ticker
+                    'sector': cell_text(cells, 'SECTOR'),
+                    'open':      _parse_num(cell_text(cells, 'OPEN')),
+                    'high':      _parse_num(cell_text(cells, 'HIGH')),
+                    'low':       _parse_num(cell_text(cells, 'LOW')),
+                    'close':     close,
+                    'volume':    int(_parse_num(cell_text(cells, 'VOLUME'))),
+                    'change':    _parse_num(cell_text(cells, 'CHANGE')),
+                    'changePct': _parse_num(cell_text(cells, 'CHANGE(%)')),
+                    'ldcp':      _parse_num(cell_text(cells, 'LDCP')),
+                    'pe': 0, 'eps': 0, 'bookValue': 0,
+                })
+            except (ValueError, TypeError, IndexError) as e:
+                logger.warning(f'Skipping malformed market-watch row: {e}')
+
+        return prices
 
     except requests.RequestException as e:
-        logger.error(f'Failed to fetch prices: {e}')
+        logger.error(f'Failed to fetch market-watch: {e}')
         return []
+
+
+# PSX timeseries symbol → our DynamoDB index name
+_INDEX_MAP = {
+    'KSE100': 'KSE_100',
+    'KSE30':  'KSE_30',
+    'KMI30':  'KMI_30',
+}
 
 
 def scrape_indices():
-    """Fetch KSE-100, KSE-30, KMI-30 index values."""
-    try:
-        resp = requests.get(
-            f'{PSX_BASE}/data/index_snapshot',
-            headers=HEADERS,
-            timeout=15,
-        )
-        resp.raise_for_status()
-        data = resp.json()
+    """
+    Fetch KSE-100, KSE-30, KMI-30 from the timeseries/eod endpoint.
+    PSX removed /data/index_snapshot; the timeseries API is the current source.
+    Each row is [timestamp, open, volume, close]. Change is calculated as
+    close - previous_close using the two most recent rows.
+    """
+    indices = []
+    for psx_sym, our_name in _INDEX_MAP.items():
+        try:
+            resp = requests.get(
+                f'{PSX_BASE}/timeseries/eod/{psx_sym}',
+                headers=HEADERS,
+                timeout=15,
+            )
+            resp.raise_for_status()
+            data = resp.json().get('data', [])
+            if not data:
+                continue
 
-        indices = []
-        for item in data.get('data', []):
-            indices.append({
-                'name': item.get('index_name', '').replace(' ', '_').replace('-', '_').upper(),
-                'value': float(item.get('current', 0) or 0),
-                'change': float(item.get('change', 0) or 0),
-                'changePct': float(item.get('change_p', 0) or 0),
-                'volume': int(item.get('volume', 0) or 0),
-            })
+            # data[0] = most recent row: [timestamp, open, volume, close]
+            latest = data[0]
+            value = float(latest[3])
+            volume = int(latest[2])
 
-        return [i for i in indices if i['value'] > 0]
+            # Day-over-day change requires a previous close
+            if len(data) >= 2:
+                prev_close = float(data[1][3])
+                change = value - prev_close
+                change_pct = (change / prev_close * 100) if prev_close else 0.0
+            else:
+                change, change_pct = 0.0, 0.0
 
-    except requests.RequestException as e:
-        logger.error(f'Failed to fetch indices: {e}')
-        return []
+            if value > 0:
+                indices.append({
+                    'name': our_name,
+                    'value': value,
+                    'change': change,
+                    'changePct': change_pct,
+                    'volume': volume,
+                })
+
+        except requests.RequestException as e:
+            logger.error(f'Failed to fetch index {psx_sym}: {e}')
+
+    return indices
 
 
 def scrape_dividends():
