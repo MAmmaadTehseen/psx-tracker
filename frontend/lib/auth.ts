@@ -25,12 +25,18 @@ import {
 } from 'amazon-cognito-identity-js';
 import { CONFIG } from './config';
 
-// The User Pool represents your Cognito pool.
-// poolId + clientId come from your CDK stack outputs.
-const userPool = new CognitoUserPool({
-  UserPoolId: CONFIG.COGNITO_USER_POOL_ID,
-  ClientId: CONFIG.COGNITO_CLIENT_ID,
-});
+// Lazily initialized so module load doesn't crash during Expo static export
+// (SSR route discovery runs before env vars are injected into the bundle).
+let _userPool: CognitoUserPool | null = null;
+function getUserPool(): CognitoUserPool {
+  if (!_userPool) {
+    _userPool = new CognitoUserPool({
+      UserPoolId: CONFIG.COGNITO_USER_POOL_ID,
+      ClientId: CONFIG.COGNITO_CLIENT_ID,
+    });
+  }
+  return _userPool;
+}
 
 export interface AuthTokens {
   accessToken: string;
@@ -46,7 +52,7 @@ export interface AuthTokens {
  */
 export function signIn(email: string, password: string): Promise<AuthTokens> {
   return new Promise((resolve, reject) => {
-    const user = new CognitoUser({ Username: email, Pool: userPool });
+    const user = new CognitoUser({ Username: email, Pool: getUserPool() });
     const authDetails = new AuthenticationDetails({
       Username: email,
       Password: password,
@@ -77,7 +83,7 @@ export function register(email: string, password: string): Promise<void> {
       new CognitoUserAttribute({ Name: 'email', Value: email }),
     ];
 
-    userPool.signUp(email, password, attributes, [], (err) => {
+    getUserPool().signUp(email, password, attributes, [], (err) => {
       if (err) return reject(err);
       resolve();
     });
@@ -89,7 +95,7 @@ export function register(email: string, password: string): Promise<void> {
  */
 export function verifyEmail(email: string, code: string): Promise<void> {
   return new Promise((resolve, reject) => {
-    const user = new CognitoUser({ Username: email, Pool: userPool });
+    const user = new CognitoUser({ Username: email, Pool: getUserPool() });
     user.confirmRegistration(code, true, (err) => {
       if (err) return reject(err);
       resolve();
@@ -102,7 +108,7 @@ export function verifyEmail(email: string, code: string): Promise<void> {
  */
 export function resendVerificationCode(email: string): Promise<void> {
   return new Promise((resolve, reject) => {
-    const user = new CognitoUser({ Username: email, Pool: userPool });
+    const user = new CognitoUser({ Username: email, Pool: getUserPool() });
     user.resendConfirmationCode((err) => {
       if (err) return reject(err);
       resolve();
@@ -115,7 +121,7 @@ export function resendVerificationCode(email: string): Promise<void> {
  */
 export function forgotPassword(email: string): Promise<void> {
   return new Promise((resolve, reject) => {
-    const user = new CognitoUser({ Username: email, Pool: userPool });
+    const user = new CognitoUser({ Username: email, Pool: getUserPool() });
     user.forgotPassword({
       onSuccess: () => resolve(),
       onFailure: (err) => reject(err),
@@ -132,7 +138,7 @@ export function confirmForgotPassword(
   newPassword: string
 ): Promise<void> {
   return new Promise((resolve, reject) => {
-    const user = new CognitoUser({ Username: email, Pool: userPool });
+    const user = new CognitoUser({ Username: email, Pool: getUserPool() });
     user.confirmPassword(code, newPassword, {
       onSuccess: () => resolve(),
       onFailure: (err) => reject(err),
@@ -144,7 +150,7 @@ export function confirmForgotPassword(
  * Sign out and clear all local tokens.
  */
 export function signOut(): void {
-  const user = userPool.getCurrentUser();
+  const user = getUserPool().getCurrentUser();
   if (user) user.signOut();
 }
 
@@ -155,7 +161,7 @@ export function signOut(): void {
  */
 export function getTokens(): Promise<AuthTokens | null> {
   return new Promise((resolve) => {
-    const user = userPool.getCurrentUser();
+    const user = getUserPool().getCurrentUser();
     if (!user) return resolve(null);
 
     user.getSession((err: Error | null, session: CognitoUserSession | null) => {

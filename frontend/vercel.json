@@ -1,6 +1,6 @@
 {
-  "installCommand": "cd .. && npx --yes pnpm@10 install --frozen-lockfile",
-  "buildCommand": "npx --yes pnpm@10 run build:web",
+  "installCommand": "cd .. && npx --yes pnpm@10 install --frozen-lockfile --ignore-scripts && npx --yes pnpm@10 rebuild esbuild unrs-resolver",
+  "buildCommand": "CI=1 npx --yes pnpm@10 run build:web",
   "outputDirectory": "dist",
   "framework": null
 }

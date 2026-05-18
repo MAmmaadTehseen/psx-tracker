@@ -74,99 +74,140 @@ def batch_write(table, items: list, label: str = ''):
         time.sleep(BATCH_SLEEP)
 
 
+def _parse_num(text, default=0.0):
+    try:
+        return float(str(text).replace(',', '').replace('%', '').strip() or default)
+    except (ValueError, AttributeError):
+        return default
+
+
 def seed_current(table):
     """
     Write today's stock prices, metadata, and index values.
-    Same data the scraper writes on every run — works outside market hours too
-    (PSX returns last-known prices).
+    Uses the market-watch HTML table (PSX removed the /data/equities JSON endpoint)
+    and timeseries/eod for indices. Works outside market hours — PSX returns
+    last-known prices.
     """
+    from bs4 import BeautifulSoup
+
     today = datetime.now(timezone.utc).strftime('%Y-%m-%d')
     now = datetime.now(timezone.utc).isoformat()
 
-    # Stock prices + metadata
-    logger.info('Fetching current equities from dps.psx.com.pk...')
-    resp = requests.get(f'{PSX_BASE}/data/equities', headers=HEADERS, timeout=30)
+    # --- Stock prices + metadata via market-watch HTML ---
+    logger.info('Fetching market-watch from dps.psx.com.pk...')
+    resp = requests.get(f'{PSX_BASE}/market-watch', headers=HEADERS, timeout=30)
     resp.raise_for_status()
 
-    price_items = []
-    meta_items = []
-    for item in resp.json().get('data', []):
-        ticker = item.get('symbol', '').upper()
-        close = float(item.get('current', 0) or 0)
+    soup = BeautifulSoup(resp.text, 'lxml')
+    table_el = soup.find('table')
+    if not table_el:
+        raise RuntimeError('market-watch: no table found')
+
+    rows = table_el.find_all('tr')
+    header_cells = rows[0].find_all(['th', 'td'])
+    col = {cell.get_text(strip=True).upper(): i for i, cell in enumerate(header_cells)}
+    # normalise aliases
+    for alias, canon in [('CHANGE (%)', 'CHANGE(%)'), ('CHG%', 'CHANGE(%)')]:
+        if alias in col and 'CHANGE(%)' not in col:
+            col['CHANGE(%)'] = col[alias]
+
+    def cell_val(cells, name, default=''):
+        idx = col.get(name)
+        return cells[idx].get_text(strip=True) if idx is not None and idx < len(cells) else default
+
+    price_items, meta_items = [], []
+    for row in rows[1:]:
+        cells = row.find_all('td')
+        if len(cells) < 4:
+            continue
+        ticker = cells[col.get('SYMBOL', 0)].get_text(strip=True).upper()
+        close = _parse_num(cell_val(cells, 'CURRENT'))
         if not ticker or close <= 0:
             continue
 
         price_items.append({
-            'PK': f'STOCK#{ticker}',
-            'SK': f'PRICE#{today}',
-            'open': to_decimal(item.get('open', 0)),
-            'high': to_decimal(item.get('high', 0)),
-            'low': to_decimal(item.get('low', 0)),
-            'close': to_decimal(close),
-            'volume': int(item.get('volume', 0) or 0),
-            'change': to_decimal(item.get('change', 0)),
-            'changePct': to_decimal(item.get('change_p', 0)),
-            'ldcp': to_decimal(item.get('ldcp', 0)),
+            'PK': f'STOCK#{ticker}', 'SK': f'PRICE#{today}',
+            'open':      to_decimal(cell_val(cells, 'OPEN')),
+            'high':      to_decimal(cell_val(cells, 'HIGH')),
+            'low':       to_decimal(cell_val(cells, 'LOW')),
+            'close':     to_decimal(close),
+            'volume':    int(_parse_num(cell_val(cells, 'VOLUME'))),
+            'change':    to_decimal(cell_val(cells, 'CHANGE')),
+            'changePct': to_decimal(cell_val(cells, 'CHANGE(%)')),
+            'ldcp':      to_decimal(cell_val(cells, 'LDCP')),
             'updatedAt': now,
         })
-
-        meta = {
-            'PK': f'STOCK#{ticker}',
-            'SK': 'METADATA',
+        meta_items.append({
+            'PK': f'STOCK#{ticker}', 'SK': 'METADATA',
             'ticker': ticker,
-            'name': item.get('name', '') or item.get('company_name', ''),
-            'sector': item.get('sector', '') or item.get('sector_name', ''),
+            'name': ticker,   # market-watch has no full company name
+            'sector': cell_val(cells, 'SECTOR'),
             'updatedAt': now,
-        }
-        pe = float(item.get('pe', 0) or 0)
-        eps = float(item.get('eps', 0) or 0)
-        bv = float(item.get('bv', 0) or item.get('book_value', 0) or 0)
-        if pe:
-            meta['pe'] = to_decimal(pe)
-        if eps:
-            meta['eps'] = to_decimal(eps)
-        if bv:
-            meta['bookValue'] = to_decimal(bv)
-        meta_items.append(meta)
+        })
 
     batch_write(table, price_items, 'stock price items')
     batch_write(table, meta_items, 'stock metadata items')
 
-    # Indices
-    logger.info('Fetching index snapshot...')
-    resp = requests.get(f'{PSX_BASE}/data/index_snapshot', headers=HEADERS, timeout=15)
-    resp.raise_for_status()
-
+    # --- Indices via timeseries/eod ---
+    logger.info('Fetching index values...')
+    index_map = {'KSE100': 'KSE_100', 'KSE30': 'KSE_30', 'KMI30': 'KMI_30'}
     index_items = []
-    for item in resp.json().get('data', []):
-        # Normalise: "KSE 100" → "KSE_100", "KSE-100" → "KSE_100"
-        name = item.get('index_name', '').replace(' ', '_').replace('-', '_').upper()
-        value = float(item.get('current', 0) or 0)
-        if not name or value <= 0:
+    for psx_sym, our_name in index_map.items():
+        resp = requests.get(f'{PSX_BASE}/timeseries/eod/{psx_sym}', headers=HEADERS, timeout=15)
+        if not resp.ok:
+            logger.warning(f'Index {psx_sym} returned {resp.status_code}')
+            continue
+        data = resp.json().get('data', [])
+        if not data:
+            continue
+        latest = data[0]   # [timestamp, open, volume, close]
+        value = float(latest[3])
+        volume = int(latest[2])
+        if len(data) >= 2:
+            prev = float(data[1][3])
+            change = value - prev
+            change_pct = (change / prev * 100) if prev else 0.0
+        else:
+            change, change_pct = 0.0, 0.0
+        if value <= 0:
             continue
         base = {
-            'value': to_decimal(value),
-            'change': to_decimal(item.get('change', 0)),
-            'changePct': to_decimal(item.get('change_p', 0)),
-            'volume': int(item.get('volume', 0) or 0),
+            'value': to_decimal(value), 'change': to_decimal(change),
+            'changePct': to_decimal(change_pct), 'volume': volume,
             'updatedAt': now,
         }
-        index_items.append({'PK': f'INDEX#{name}', 'SK': 'LATEST', **base})
-        index_items.append({'PK': f'INDEX#{name}', 'SK': f'PRICE#{today}', **base})
+        index_items.append({'PK': f'INDEX#{our_name}', 'SK': 'LATEST', **base})
+        index_items.append({'PK': f'INDEX#{our_name}', 'SK': f'PRICE#{today}', **base})
 
     batch_write(table, index_items, 'index items')
     logger.info('Current data seeded.')
 
 
 def get_all_tickers() -> list[str]:
-    resp = requests.get(f'{PSX_BASE}/data/equities', headers=HEADERS, timeout=30)
+    """Get all PSX ticker symbols from the market-watch page.
+    PSX removed /data/equities; market-watch is the only full-snapshot source.
+    """
+    from bs4 import BeautifulSoup
+    resp = requests.get(f'{PSX_BASE}/market-watch', headers=HEADERS, timeout=30)
     resp.raise_for_status()
-    tickers = [
-        item.get('symbol', '').upper()
-        for item in resp.json().get('data', [])
-        if item.get('symbol')
-    ]
-    logger.info(f'Found {len(tickers)} tickers')
+    soup = BeautifulSoup(resp.text, 'lxml')
+    table_el = soup.find('table')
+    if not table_el:
+        raise RuntimeError('market-watch: no table found — cannot discover tickers')
+    rows = table_el.find_all('tr')
+    if not rows:
+        return []
+    header_cells = rows[0].find_all(['th', 'td'])
+    col = {cell.get_text(strip=True).upper(): i for i, cell in enumerate(header_cells)}
+    sym_idx = col.get('SYMBOL', 0)
+    tickers = []
+    for row in rows[1:]:
+        cells = row.find_all('td')
+        if len(cells) > sym_idx:
+            t = cells[sym_idx].get_text(strip=True).upper()
+            if t:
+                tickers.append(t)
+    logger.info(f'Found {len(tickers)} tickers from market-watch')
     return tickers
 
 

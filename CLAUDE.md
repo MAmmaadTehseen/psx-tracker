@@ -96,7 +96,7 @@ Frontend reads from `.env.local` (gitignored — see `.env.local.example`):
 EXPO_PUBLIC_API_URL=https://<id>.execute-api.us-east-1.amazonaws.com
 EXPO_PUBLIC_COGNITO_USER_POOL_ID=us-east-1_XXXXXXX
 EXPO_PUBLIC_COGNITO_CLIENT_ID=<client-id>
-EXPO_PUBLIC_REGION=us-east-1
+EXPO_PUBLIC_COGNITO_REGION=us-east-1
 ```
 
 Values come from CDK stack outputs after `cdk deploy --all`.
